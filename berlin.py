@@ -14,15 +14,17 @@ from tqdm import tqdm
 import pathlib
 
 # Parametres
-BATCH_SIZE = 12 # 3 for xresnet50, 12 for xresnet34 with Tesla P100 (16GB)
+BATCH_SIZE = 12 
+BATCH_SIZE_NEW2 = 1
 TILES_PER_SCENE = 16
 ARCHITECTURE = xresnet34
-EPOCHS = 5
+EPOCHS = 40
 CLASS_WEIGHTS = [0.25,0.75]
 LR_MAX = 3e-4
 ENCODER_FACTOR = 10
 CODES = ['Land','Building']
 path = pathlib.Path(r"C:\Users\Timbo\Documents\Projet\multi\data\SN7_buildings_train\train")
+pathNEW2 = pathlib.Path(r"C:\Users\Timbo\Documents\Projet\multi\data\NEW2\AerialImageDataset\train")
 
 #
 # SOURCE:  https://lpsmlgeo.github.io/2019-09-22-binary_mask/
@@ -161,7 +163,34 @@ def cut_tiles(tile_size:int):
         Image.fromarray(img_tile).save(f'{scene}/img_tiles/{fn.name[:-4]}_{i}_{j}.png')
         Image.fromarray(msk_tile).save(f'{scene}/mask_tiles/{fn.name[:-4]}_{i}_{j}.png')
 
+def cut_tiles_NEW2(new2path, tile_size:int):
+   gt_files = []
+   gt_files = get_image_files(pathlib.Path(new2path+r'images'))
+   for fn in tqdm(gt_files):
+      img = np.array(PILImage.create(fn))
+      msk_fn = str(fn).replace('images', 'gt')
+      msk = np.array(PILMask.create(msk_fn))
+      x, y, _ = img.shape
 
+      for i in range(x//tile_size):
+        for j in range(y//tile_size):
+           img_tile = img[i*tile_size:(i+1)*tile_size,j*tile_size:(j+1)*tile_size]
+           msk_tile = msk[i*tile_size:(i+1)*tile_size,j*tile_size:(j+1)*tile_size]
+           Image.fromarray(img_tile).save(f'{new2path}/im_tiles/{fn.name[:-4]}_{i}_{j}.png')
+           Image.fromarray(msk_tile).save(f'{new2path}/gt_tiles/{fn.name[:-4]}_{i}_{j}.png')
+
+#
+# Downscaling images
+#            
+def downscale_NEW2(ipath, size:int):
+   arr = os.listdir(ipath)
+   for ip in arr:
+      pathread = pathlib.Path(ipath+'/'+ip)
+      pathsave = pathlib.Path(ipath+'_ds2/'+ip)
+      im = Image.open(pathread)
+      im.thumbnail((size, size), Image.Resampling.LANCZOS)
+      im.save(pathsave, "PNG")
+      
 #
 # Data Loading Functions
 #
@@ -182,6 +211,25 @@ def get_y(fn:Path) -> PILMask:
   msk = np.array(PILMask.create(fn))
   msk[msk==255] = 1
   return PILMask.create(msk)
+
+def get_image_tiles_NEW2(path:Path) -> L:
+   files = L()
+   files = get_image_files(path=path, folders='im_tiles_ds2')
+   return files
+
+def get_y_fn_NEW2(fn:Path) -> str:
+  #print(str(fn).replace('im_tiles', 'gt_tiles'))
+  return str(fn).replace('im_tiles', 'gt_tiles')
+
+def get_y_NEW2(fn:Path) -> PILMask:
+   fn = get_y_fn_NEW2(fn)
+   msk = np.array(PILMask.create(fn))
+   #print(msk)
+   #msk[msk==255] = 1
+   msk = msk / 255
+   #print(msk)
+   return PILMask.create(msk)
+
 
 #
 # Visualizing the Data
@@ -376,6 +424,51 @@ def define_model():
    print(learn.model)
    learn.export(fname='berlin.pkl')
    return learn, dls
+
+def define_model_NEW2():
+   #
+   # Creating Dataloaders
+   #
+   tfms = [Dihedral(0.5),              # Horizontal and vertical flip
+        Rotate(max_deg=180, p=0.9), # Rotation in any direction possible
+        Brightness(0.2, p=0.75),
+        Contrast(0.2),
+        Saturation(0.2),
+        (Normalize.from_stats(*imagenet_stats))
+        ]
+   tiles = DataBlock(
+      blocks = (ImageBlock(),MaskBlock(codes=CODES)), 
+      get_items = get_image_tiles_NEW2,
+      get_y = get_y_NEW2,                                           
+      batch_tfms = tfms                               
+    )   
+   dls = tiles.dataloaders(pathNEW2, bs=BATCH_SIZE_NEW2, num_workers=0)
+   dls.vocab = CODES
+   print(len(dls.train_ds), len(dls.valid_ds))
+   inputs, targets = dls.one_batch()
+   print(inputs.shape, targets.shape)
+   print(targets[0].unique())
+   #
+   # Defining the Model
+   #
+   weights = Tensor(CLASS_WEIGHTS).cuda()
+   loss_func = CrossEntropyLossFlat(axis=1, weight=weights)
+   learn = unet_learner(dls,                                 # DataLoaders
+                     ARCHITECTURE,                        # xResNet34
+                     loss_func = loss_func,               # Weighted cross entropy loss
+                     opt_func = Adam,                     # Adam optimizer
+                     metrics = [Dice(), foreground_acc],  # Custom metrics
+                     self_attention = False,
+                     cbs = [SaveModelCallback(
+                              monitor='dice',
+                              comp=np.greater,
+                              fname='best-model'
+                            )]
+                     )
+   #print(learn.summary())
+   #print(learn.model)
+   learn.export(fname='berlin3.pkl')
+   return learn, dls
    
 def train(learn, dls):
    lr_max = LR_MAX # 3e-4
@@ -409,10 +502,10 @@ def predict(learn):
    
 def main(model_path, img):
    torch.cuda.empty_cache()
-   model = load_learner(model_path+r'berlin.pkl', cpu=False)
+   model = load_learner(model_path+r'berlin3.pkl', cpu=False)
    model.load('best-model')
    im = Image.open(img)
-   im.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+   im.thumbnail((3000, 3000), Image.Resampling.LANCZOS)
    m = model.predict(im)
    m = to_image(m[2][1].repeat(3,1,1))
    pathsave = r'C:\Users\Timbo\Documents\Projet\multi\data\mask.jpg'
@@ -440,9 +533,16 @@ if __name__ == "__main__":
     print(torch.cuda.is_available())
     #preprocess()
     #model, loader = define_model()
-    model_path = r'C:/Users/Timbo/Documents/Projet/multi/models/'
+    #model_path = r'C:/Users/Timbo/Documents/Projet/multi/models/'
+    model_path = r'./'
     #import_model(model_path)
     #predict(model)
     i = r'C:/Users/Timbo/Documents/Projet/multi/data/test/phoco.jpg'
     #ghnm(model_path, i)
     main(model_path=model_path, img=i)
+
+    new2path = r'C:/Users/Timbo/Documents/Projet/multi/data/NEW2/AerialImageDataset/train/'
+    #cut_tiles_NEW2(new2path=new2path, tile_size=2500)
+    #downscale_NEW2(r'C:/Users/Timbo/Documents/Projet/multi/data/NEW2/AerialImageDataset/train/im_tiles', 1250)
+    #model, loader = define_model_NEW2()
+    #train(model, loader)
