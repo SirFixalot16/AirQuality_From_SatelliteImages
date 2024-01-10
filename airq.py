@@ -26,6 +26,7 @@ def preprocess(npdf):
         im.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
         im.save(pathsave, "JPEG")
 
+
 def get_data():
     print('date?')
     dataframe = pandas.read_csv(path_csv, delimiter=',', names=["ct", "airq"])
@@ -48,12 +49,10 @@ def get_data():
     return x_list, y_list, images
 
 
-def main():
-    print('mon mon ya ya')
-
 import sys
 #np.set_printoptions(threshold=sys.maxsize)
 
+
 if __name__ == "__main__":
-    print('vowlr')
+    print('AirQ')
     #main()
