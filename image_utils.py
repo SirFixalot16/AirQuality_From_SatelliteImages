@@ -95,3 +95,107 @@ def generate_mask(raster_path, shape_path, output_path=None, file_name=None):
           dst.write(mask * 255, 1)
     else: 
       return mask
+    
+#
+# Function to convert black-and-white mask to transparent mask
+#
+def greyscale_to_transparent(img:Image)->Image:
+    data = img.getdata()
+    
+    newData = []
+    for item in data:
+        if item[0] > 100:
+            newData.append((255, 255))
+        else:
+            newData.append((0, 0))
+
+    img.putdata(newData)
+    return img
+
+#
+# Convert white footprints to one of the three colors: red, green, blue 
+#
+def white_to_color(img:Image, color, pixel_shape=3000, background=False)->Image:
+    red, green, blue = 0, 0, 0
+    if (color == "red"): red = 255
+    elif (color == "green"): green = 255
+    elif (color == "blue"): blue = 255
+
+    res = Image.new('RGBA', (pixel_shape, pixel_shape))
+    data = img.getdata()
+    newData = []
+
+    for item in data:
+        if item[0] == 255 and item[1] == 255:
+            newData.append((red, green, blue, 255))
+        elif background==True:
+            newData.append((0, 0, 0, 255))
+        else:
+            newData.append((0, 0, 0, 0))
+    
+    res.putdata(newData)
+    return res
+
+#
+# Merge 3 transparent masks to create RGB mask
+#
+def merge_masks(r, g:Image, b)->Image:
+    # Open as PIL greyscale
+    r = Image.open(r)
+    r = r.convert('LA')
+    #g = Image.open(g)
+    #g = g.convert('LA')
+    b = Image.open(b)
+    b = b.convert('LA')
+
+    # Convert to numpy array
+    npr = np.array(r)
+    #npg = np.array(g)
+    npb = np.array(b)
+    npr[npr <= 100] = 0
+    #npg[npg <= 100] = 0
+    npb[npb <= 100] = 0
+
+    # Convert to channels
+    r = Image.fromarray(npr, 'LA')
+    #g = Image.fromarray(npg, 'LA')
+    b = Image.fromarray(npb, 'LA')
+    r = greyscale_to_transparent(r)
+    #g = greyscale_to_transparent(g)
+    b = greyscale_to_transparent(b)
+    r = white_to_color(img=r, color='red', background=True)
+    #g = white_to_color(img=b, color='green')
+    b = white_to_color(img=b, color='blue')
+    r.paste(g, g)
+    r.paste(b, b)
+    print(r)
+
+#
+# Segment all green elements in image and covert them to full green pixels
+#
+def generate_greens(img)->Image:
+    im = Image.open(img)
+    im.thumbnail((3000, 3000), Image.Resampling.LANCZOS)
+    HSVim = im.convert('HSV')
+    #im.show()
+    im_og = np.array(im)
+    im_arr = np.array(HSVim)
+    H = im_arr[:,:,0]
+    lo, hi = 100, 140
+    lo = int((lo * 255) / 360)
+    hi = int((hi * 255) / 360)
+    green = np.where((H>lo) & (H<hi))
+    im_og[green] = [0,0,0]
+    im=Image.fromarray(im_og)
+    data = im.getdata()
+    newData = []
+    for item in data:
+        if item[0]==0 and item[1]==0 and item[2]==0:
+            newData.append((0, 255, 0, 255))
+        else:
+            newData.append((0, 0, 0, 0))
+        #print(item)
+    res = Image.new('RGBA', (3000, 3000))
+    res.putdata(newData)
+    
+    return res
